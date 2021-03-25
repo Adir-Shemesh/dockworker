@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::env;
 use std::ffi::OsStr;
 use std::fmt;
@@ -82,25 +83,48 @@ pub struct Docker {
     credential: Option<Credential>,
 }
 
-/// Type of general docker error response
 #[derive(Debug, Deserialize)]
-pub struct DockerError {
+pub struct DockerErrorData {
     pub message: String,
 }
 
-impl fmt::Display for DockerError {
+/// Type of general docker error response
+#[derive(Debug)]
+pub struct DockerError {
+    pub data: DockerErrorData,
+    pub status: u16,
+}
+
+impl fmt::Display for DockerErrorData {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "{}", self.message)
     }
 }
 
+impl fmt::Display for DockerError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{}", self.data.message)
+    }
+}
+
 impl ::std::error::Error for DockerError {
     fn description(&self) -> &str {
-        &self.message
+        &self.data.message
     }
 
     fn cause(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
+    }
+}
+
+impl TryFrom<Response> for DockerError {
+    type Error = crate::errors::Error;
+
+    fn try_from(res: Response) -> std::result::Result<Self, Self::Error> {
+        Ok(DockerError {
+            status: res.status.as_u16(),
+            data: serde_json::from_reader::<_, DockerErrorData>(res)?,
+        })
     }
 }
 
@@ -109,7 +133,7 @@ fn api_result<D: DeserializeOwned>(res: Response) -> Result<D> {
     if res.status.is_success() {
         Ok(serde_json::from_reader::<_, D>(res)?)
     } else {
-        Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+        Err(DockerError::try_from(res)?.into())
     }
 }
 
@@ -118,7 +142,7 @@ fn no_content(res: Response) -> Result<()> {
     if res.status == StatusCode::NO_CONTENT {
         Ok(())
     } else {
-        Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+        Err(DockerError::try_from(res)?.into())
     }
 }
 
@@ -127,7 +151,7 @@ fn no_content_or_not_modified(res: Response) -> Result<()> {
     if res.status == StatusCode::NO_CONTENT || res.status == StatusCode::NOT_MODIFIED {
         Ok(())
     } else {
-        Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+        Err(DockerError::try_from(res)?.into())
     }
 }
 
@@ -139,7 +163,7 @@ fn ignore_result(res: Response) -> Result<()> {
         res.bytes().last(); // ignore
         Ok(())
     } else {
-        Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+        Err(DockerError::try_from(res)?.into())
     }
 }
 
@@ -438,7 +462,7 @@ impl Docker {
                 if res.status.is_success() {
                     Ok(AttachResponse::new(res))
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -494,7 +518,7 @@ impl Docker {
                 if res.status.is_success() && res.status == StatusCode::CREATED {
                     Ok(())
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -568,7 +592,7 @@ impl Docker {
                 if res.status.is_success() {
                     Ok(AttachResponse::new(res))
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -600,7 +624,7 @@ impl Docker {
                 if res.status.is_success() {
                     Ok(res.into())
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -656,7 +680,11 @@ impl Docker {
             self.headers(),
             &format!("/containers/{}/stats", container_id),
         )?;
-        Ok(StatsReader::new(res))
+        if res.status.is_success() {
+            Ok(StatsReader::new(res))
+        } else {
+            Err(DockerError::try_from(res)?.into())
+        }
     }
 
     /// Wait for a container
@@ -709,7 +737,7 @@ impl Docker {
                 if res.status.is_success() {
                     Ok(tar::Archive::new(Box::new(res) as Box<dyn Read>))
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -794,7 +822,7 @@ impl Docker {
             tar_path,
         )?;
         if !res.status.is_success() {
-            return Err(serde_json::from_reader::<_, DockerError>(res)?.into());
+            return Err(DockerError::try_from(res)?.into())
         }
 
         Ok(res)
@@ -836,7 +864,7 @@ impl Docker {
                     .map(|line| Ok(serde_json::from_str(&line?)?)),
             ))
         } else {
-            Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+            Err(DockerError::try_from(res)?.into())
         }
     }
 
@@ -961,7 +989,7 @@ impl Docker {
                 if res.status.is_success() {
                     Ok(Box::new(res) as Box<dyn Read>)
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -983,7 +1011,7 @@ impl Docker {
             path,
         )?;
         if !res.status.is_success() {
-            return Err(serde_json::from_reader::<_, DockerError>(res)?.into());
+            return Err(DockerError::try_from(res)?.into())
         }
         // read and discard to end of response
         for line in BufReader::new(res).lines() {
@@ -1093,7 +1121,7 @@ impl Docker {
                 if res.status.is_success() {
                     Ok(Box::new(res) as Box<dyn Read>)
                 } else {
-                    Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+                    Err(DockerError::try_from(res)?.into())
                 }
             })
     }
@@ -1110,7 +1138,7 @@ impl Docker {
             assert_eq!(&buf, "OK");
             Ok(())
         } else {
-            Err(serde_json::from_reader::<_, DockerError>(res)?.into())
+            Err(DockerError::try_from(res)?.into())
         }
     }
 
@@ -1374,19 +1402,19 @@ mod tests {
         assert!(docker
             .create_container(
                 Some("dockworker_test_create_remove_stop_container"),
-                &create
+                &create,
             )
             .is_ok());
         assert!(docker
             .stop_container(
                 "dockworker_test_create_remove_stop_container",
-                Duration::from_secs(10)
+                Duration::from_secs(10),
             )
             .is_ok());
         assert!(docker
             .stop_container(
                 "dockworker_test_create_remove_stop_container",
-                Duration::from_secs(10)
+                Duration::from_secs(10),
             )
             .is_ok());
         assert!(docker
@@ -1394,7 +1422,7 @@ mod tests {
                 "dockworker_test_create_remove_stop_container",
                 None,
                 None,
-                None
+                None,
             )
             .is_ok());
         assert!(docker
@@ -1451,8 +1479,8 @@ mod tests {
                     &container.id,
                     &CheckpointDeleteOptions {
                         checkpoint_id: "v1".to_string(),
-                        checkpoint_dir: None
-                    }
+                        checkpoint_dir: None,
+                    },
                 )
                 .is_ok());
 
@@ -1661,7 +1689,7 @@ mod tests {
 
         assert!(equal_file(
             test_file,
-            &temp_dir.join("put").join(test_file.file_name().unwrap())
+            &temp_dir.join("put").join(test_file.file_name().unwrap()),
         ));
     }
 
